@@ -25,7 +25,7 @@ from transformers.utils import SAFE_WEIGHTS_INDEX_NAME
 
 from vllm.attention import Attention
 from vllm.config import (LoadConfig, LoadFormat, ModelConfig, ParallelConfig,
-                         VllmConfig, set_current_vllm_config)
+                         VllmConfig, set_current_vllm_config, ForkedPdb)
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.envs import VLLM_USE_MODELSCOPE
@@ -399,8 +399,9 @@ class DefaultModelLoader(BaseModelLoader):
 
             logger.info("Loading weights on %s...", load_device)
             weights_to_load = {name for name, _ in model.named_parameters()}
-            loaded_weights = model.load_weights(
-                self._get_all_weights(model_config, model))
+            #loaded_weights = model.load_weights(
+            #    self._get_all_weights(model_config, model))
+            loaded_weights = None
             # We only enable strict check for non-quantized models
             # that have loaded weights tracking currently.
             if model_config.quantization is None and loaded_weights is not None:
@@ -435,6 +436,8 @@ class DefaultModelLoader(BaseModelLoader):
                     module.process_weights_after_loading(model_config.dtype)
                     if is_hpu:
                         hpu_distributed_barrier()
+        model.name_or_path = "/mnt/disk5/hf_models/DeepSeek-R1-BF16/"
+        model.base_model_prefix = "model"
         return model.eval()
 
 

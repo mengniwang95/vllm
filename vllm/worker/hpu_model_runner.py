@@ -754,6 +754,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
 
             if self.model_config.quantization is not None and "inc" in self.model_config.quantization:
                 logger.info("Preparing model with INC..")
+                import sys
+                sys.path.insert(0, "/mengni/inc")
                 with HabanaMemoryProfiler() as m_inc:
                     from neural_compressor.torch.quantization import (
                         FP8Config, convert, prepare)

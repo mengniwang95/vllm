@@ -7,6 +7,8 @@ from transformers import (PreTrainedTokenizerBase, AutoTokenizer)
 import random
 import datasets
 # get file location
+import sys
+sys.path.insert(0, "/mengni/convert/yi")
 file_path = os.path.abspath(__file__)
 dataset_path = os.path.join(os.path.dirname(file_path), "../benchmarks")
 
@@ -178,17 +180,37 @@ if __name__ == "__main__":
     # Create a sampling params object.
     sampling_params = SamplingParams(temperature=0, max_tokens=args.osl)
     model = args.model
-
-    llm = LLM(
-        model=model, 
-        tokenizer=args.tokenizer,
-        tensor_parallel_size=args.tp_size,
-        distributed_executor_backend='ray',
-        quantization="inc_p",
-        trust_remote_code=True,
-        max_model_len=16384,
-        dtype="bfloat16",
-    )
+    if args.tp_size == 1:
+        llm = LLM(
+            model=model, 
+            tokenizer=args.tokenizer,
+            trust_remote_code=True,
+            dtype="bfloat16",
+            max_model_len=16384,
+        )
+    else:
+        if quant_inc:
+            llm = LLM(
+                model=model, 
+                tokenizer=args.tokenizer,
+                tensor_parallel_size=args.tp_size,
+                #distributed_executor_backend='mp',
+                trust_remote_code=True,
+                max_model_len=16384,
+                quantization="inc",
+                dtype="bfloat16",
+            )
+        else:
+            llm = LLM(
+                model=model, 
+                tokenizer=args.tokenizer,
+                tensor_parallel_size=args.tp_size,
+                distributed_executor_backend='mp',
+                trust_remote_code=True,
+                max_model_len=16384,
+                dtype="bfloat16",
+            )
+            
 
     # Generate texts from the prompts. The output is a list of RequestOutput objects
     # that contain the prompt, generated text, and other information.
