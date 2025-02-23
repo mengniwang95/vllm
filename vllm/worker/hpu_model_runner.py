@@ -750,6 +750,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 self.model = self.lora_manager.create_lora_manager(self.model)
             if self.model_config.quantization == 'inc':
                 logger.info("Preparing model with INC..")
+                import sys
+                sys.path.insert(0, "/mengni/inc")
                 with HabanaMemoryProfiler() as m_inc:
                     from neural_compressor.torch.quantization import (
                         FP8Config, convert, prepare)

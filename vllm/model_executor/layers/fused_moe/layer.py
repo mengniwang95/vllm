@@ -322,8 +322,8 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
             max_expert = (i + 1) * n_expert_slice
             # w13_list_slice = [w13_list[i].weight.squeeze() for i in range(min_expert, max_expert)]
             # w2_list_slice = [w2_list[i].weight.squeeze() for i in range(min_expert, max_expert)]
-            w13_list_slice = [layer.w13_weight[j].squeeze().clone() for j in range(min_expert, max_expert)]
-            w2_list_slice = [layer.w2_weight[j].squeeze().clone() for j in range(min_expert, max_expert)]
+            w13_list_slice = [layer.w13_weight[j].squeeze() for j in range(min_expert, max_expert)]
+            w2_list_slice = [layer.w2_weight[j].squeeze() for j in range(min_expert, max_expert)]
             # print(f"w13_list_slice[0].shape: {w13_list_slice[0].shape}, device: {w13_list_slice[0].device}, dtype: {w13_list_slice[0].dtype}")
             # print(f"w2_list_slice[0].shape: {w2_list_slice[0].shape}, device: {w2_list_slice[0].device}, dtype: {w2_list_slice[0].dtype}")
             # print(f"hidden_states.shape: {x.shape}, device: {x.device}, dtype: {x.dtype}")
@@ -580,7 +580,7 @@ class FusedMoE(torch.nn.Module):
         # so that INC can patch it for measurement and quantization.
         if layer._need_init_dynamic_fused_moe_lst:
             num_experts_on_rank = self.num_experts
-            layer._need_init_dynamic_fused_moe_lst = False
+            #layer._need_init_dynamic_fused_moe_lst = False
             num_expert_per_group = num_experts_on_rank// NUM_EXPERT_GROUPS
             n_expert_slice = num_experts_on_rank // NUM_EXPERT_GROUPS
             assert n_expert_slice * NUM_EXPERT_GROUPS == num_experts_on_rank
@@ -591,20 +591,30 @@ class FusedMoE(torch.nn.Module):
                 max_expert = (i + 1) * n_expert_slice
                 # rank_debug(f"i:{i}, num_experts:{num_experts} loading experts from {min_expert} to {max_expert}, layer.w13_weight.shape : {layer.w13_weight.shape}")
                 w13_list_slice = [
-                    layer.w13_weight[j].clone()
+                    layer.w13_weight[j]
                     for j in range(min_expert, max_expert)
                 ]
                 w2_list_slice = [
-                    layer.w2_weight[j].clone()
+                    layer.w2_weight[j]
                     for j in range(min_expert, max_expert)
                 ]
                 for index in range(len(w13_list_slice)):
                     _temp_expert_group.MoeOp.w13_list[index].set_weight(
-                        w13_list_slice[index]
+                        #w13_list_slice[index]
+                        torch.empty(w13_list_slice[index].shape, dtype=w13_list_slice[index].dtype)
                     )
                     _temp_expert_group.MoeOp.w2_list[index].set_weight(
-                        w2_list_slice[index]
+                        #w2_list_slice[index]
+                        torch.empty(w2_list_slice[index].shape, dtype=w2_list_slice[index].dtype)
                     )
+ 
+                #for index in range(len(w13_list_slice)):
+                #    _temp_expert_group.MoeOp.w13_list[index].set_weight(
+                #        w13_list_slice[index]
+                #    )
+                #    _temp_expert_group.MoeOp.w2_list[index].set_weight(
+                #        w2_list_slice[index]
+                #    )
                 # FIXME: (Yi) pass `experts_min` and `experts_max` to MoeOp.
                 setattr(_temp_expert_group.MoeOp, "experts_min", min_expert)
                 setattr(_temp_expert_group.MoeOp, "experts_max", max_expert - 1)
@@ -862,13 +872,26 @@ class FusedMoE(torch.nn.Module):
 
         # Case model weights
         if "weight" in weight_name:
-            self._load_model_weight_or_group_weight_scale(
-                shard_id=shard_id,
-                shard_dim=shard_dim,
-                loaded_weight=loaded_weight,
-                expert_data=expert_data,
-                tp_rank=tp_rank,
-                expert_id=expert_id)
+            if not self._need_init_dynamic_fused_moe_lst:
+                self._load_model_weight_or_group_weight_scale(
+                    shard_id=shard_id,
+                    shard_dim=shard_dim,
+                    loaded_weight=loaded_weight,
+                    expert_data=expert_data,
+                    tp_rank=tp_rank,
+                    expert_id=expert_id)
+            else:
+                group_id = expert_id // 4
+                exprt_id_in_group = expert_id % 4
+                temp_expert_group = getattr(self, f"_temp_expert_group_{group_id}")
+                moe = getattr(temp_expert_group.MoeOp, "w2_list") if shard_id in ["w2"] else getattr(temp_expert_group.MoeOp, "w13_list")
+                self._load_model_weight_or_group_weight_scale(
+                    shard_id=shard_id,
+                    shard_dim=shard_dim,
+                    loaded_weight=loaded_weight,
+                    expert_data=moe[exprt_id_in_group].weight,
+                    tp_rank=tp_rank,
+                    expert_id=expert_id)
             return
 
     @staticmethod

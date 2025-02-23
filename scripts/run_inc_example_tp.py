@@ -7,12 +7,15 @@ from transformers import (PreTrainedTokenizerBase, AutoTokenizer)
 import random
 import datasets
 # get file location
+import sys
+sys.path.insert(0, "/mengni/convert/yi")
 file_path = os.path.abspath(__file__)
 dataset_path = os.path.join(os.path.dirname(file_path), "../benchmarks")
 
-model_path = "/data/models/DeepSeek-R1/"
+#model_path = "/data/models/DeepSeek-R1/"
 # model_path = "deepseek-ai/DeepSeek-V2-Lite"
-model_path = "/software/users/yiliu4/HF_HOME/hub/deepseekv3-bf16-4l-real"
+#model_path = "/software/users/yiliu4/HF_HOME/hub/deepseekv3-bf16-4l-real"
+model_path="/mengni/DeepSeek-V3-bf16"
 
 
 # Parse the command-line arguments.
@@ -200,7 +203,7 @@ if __name__ == "__main__":
                 model=model, 
                 tokenizer=args.tokenizer,
                 tensor_parallel_size=args.tp_size,
-                distributed_executor_backend='mp',
+                #distributed_executor_backend='mp',
                 trust_remote_code=True,
                 max_model_len=16384,
                 quantization="inc",

@@ -25,7 +25,7 @@ from transformers.utils import SAFE_WEIGHTS_INDEX_NAME
 
 from vllm.attention import Attention
 from vllm.config import (LoadConfig, LoadFormat, ModelConfig, ParallelConfig,
-                         VllmConfig, set_current_vllm_config)
+                         VllmConfig, set_current_vllm_config, ForkedPdb)
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.envs import VLLM_USE_MODELSCOPE
@@ -54,7 +54,7 @@ from vllm.platforms import current_platform
 from vllm.transformers_utils.s3_utils import glob as s3_glob
 from vllm.transformers_utils.utils import is_s3
 from vllm.utils import is_pin_memory_available
-
+pdb = ForkedPdb()
 
 @contextmanager
 def device_loading_context(module: torch.nn.Module,
@@ -392,8 +392,9 @@ class DefaultModelLoader(BaseModelLoader):
 
             logger.info("Loading weights on %s...", load_device)
             weights_to_load = {name for name, _ in model.named_parameters()}
-            loaded_weights = model.load_weights(
-                self._get_all_weights(model_config, model))
+            #loaded_weights = model.load_weights(
+            #    self._get_all_weights(model_config, model))
+            loaded_weights = None
             # We only enable strict check for non-quantized models
             # that have loaded weights tracking currently.
             if model_config.quantization is None and loaded_weights is not None:
@@ -421,6 +422,8 @@ class DefaultModelLoader(BaseModelLoader):
                     # TODO(lucas): see if there is a way to unify the signatures
                     # of process_weights_after_loading
                     module.process_weights_after_loading(model_config.dtype)
+        model.name_or_path = "/mengni/DeepSeek-V3-G2"
+        model.base_model_prefix = "model"
         return model.eval()
 
 
