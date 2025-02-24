@@ -10,6 +10,5 @@
         "types": ["KVCache", "VLLMKVCache"],
         "names": ["lm_head"]
     },
-    "scale_format": "CONST",
-    "dump_stats_path": "/mengni/convert/yi/scripts/nc_workspace_tmp_4l_ep8_tp8/inc_measure_output"
+    "dump_stats_path": "/mengni/convert/yi/scripts/nc_workspace_tmp/inc_measure_output"
 }
