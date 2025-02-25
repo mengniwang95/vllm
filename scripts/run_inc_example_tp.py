@@ -8,14 +8,15 @@ import random
 import datasets
 # get file location
 import sys
-sys.path.insert(0, "/mengni/convert/yi")
+#sys.path.insert(0, "/mengni/convert/yi")
 file_path = os.path.abspath(__file__)
 dataset_path = os.path.join(os.path.dirname(file_path), "../benchmarks")
 
 #model_path = "/data/models/DeepSeek-R1/"
 # model_path = "deepseek-ai/DeepSeek-V2-Lite"
 #model_path = "/software/users/yiliu4/HF_HOME/hub/deepseekv3-bf16-4l-real"
-model_path="/mengni/DeepSeek-V3-bf16"
+#model_path="/mengni/DeepSeek-V3-bf16"
+model_path = "/data/models/DeepSeek-R1-bf16"
 
 
 # Parse the command-line arguments.

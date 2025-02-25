@@ -10,5 +10,5 @@
         "types": ["KVCache", "VLLMKVCache"],
         "names": ["lm_head"]
     },
-    "dump_stats_path": "/mengni/convert/yi/scripts/nc_workspace_tmp/inc_measure_output"
+    "dump_stats_path": "/mengni/yi_vllm/scripts/nc_workspace_tmp"
 }
