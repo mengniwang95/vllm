@@ -25,7 +25,7 @@ from transformers.utils import SAFE_WEIGHTS_INDEX_NAME
 
 from vllm.attention import Attention
 from vllm.config import (LoadConfig, LoadFormat, ModelConfig, ParallelConfig,
-                         VllmConfig, set_current_vllm_config, ForkedPdb)
+                         VllmConfig, set_current_vllm_config)
 from vllm.distributed import (get_tensor_model_parallel_rank,
                               get_tensor_model_parallel_world_size)
 from vllm.envs import VLLM_USE_MODELSCOPE
@@ -436,7 +436,7 @@ class DefaultModelLoader(BaseModelLoader):
                     module.process_weights_after_loading(model_config.dtype)
                     if is_hpu:
                         hpu_distributed_barrier()
-        model.name_or_path = "/mnt/disk5/hf_models/DeepSeek-R1-BF16/"
+        model.name_or_path = model_config.served_model_name
         model.base_model_prefix = "model"
         return model.eval()
 

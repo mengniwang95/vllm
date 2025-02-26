@@ -754,8 +754,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
 
             if self.model_config.quantization is not None and "inc" in self.model_config.quantization:
                 logger.info("Preparing model with INC..")
-                import sys
-                sys.path.insert(0, "/mengni/inc")
                 with HabanaMemoryProfiler() as m_inc:
                     from neural_compressor.torch.quantization import (
                         FP8Config, convert, prepare)
@@ -780,8 +778,8 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                     elif config.quantize:
                         self.model = convert(self.model, config)
                     torch.distributed.barrier()
-                    htcore.hpu_initialize(self.model,
-                                          mark_only_scales_as_const=True)
+                    #htcore.hpu_initialize(self.model,
+                    #                      mark_only_scales_as_const=True)
                 self.inc_initialized_successfully = True
                 rank_debug(f"INC MODEL: \n{self.model}", target_rank=0)
                 rank_debug(f"INC MODEL: \n{self.model}", target_rank=15)

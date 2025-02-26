@@ -1,3 +1,5 @@
+#import sys
+#sys.path.insert(0, "/mengni/yi_vllm")
 from vllm import LLM, SamplingParams
 
 import argparse
@@ -245,7 +247,7 @@ if __name__ == "__main__":
                 distributed_executor_backend='mp',
                 trust_remote_code=True,
                 quantization=quantization,
-                weights_load_device="cpu",
+                #weights_load_device="cpu",
                 max_model_len=2048,
                 dtype="bfloat16",
             )
