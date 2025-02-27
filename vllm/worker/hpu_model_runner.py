@@ -773,13 +773,17 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                         else:
                             raise ValueError(f"Invalid quantization method: {quant_method}")
                         config = FP8Config.from_json_file(config_path)
+                    if torch.distributed.get_rank() ==0:
+                        import pdb;pdb.set_trace()
                     if config.measure:
                         self.model = prepare(self.model, config)
                     elif config.quantize:
                         self.model = convert(self.model, config)
                     torch.distributed.barrier()
-                    htcore.hpu_initialize(self.model,
-                                          mark_only_scales_as_const=True)
+                    if torch.distributed.get_rank() ==0:
+                        import pdb;pdb.set_trace()
+                    #htcore.hpu_initialize(self.model,
+                    #                      mark_only_scales_as_const=True)
                 self.inc_initialized_successfully = True
                 rank_debug(f"INC MODEL: \n{self.model}", target_rank=0)
                 rank_debug(f"INC MODEL: \n{self.model}", target_rank=15)
