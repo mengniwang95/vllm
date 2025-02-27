@@ -788,7 +788,6 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                     elif config.quantize:
                         self.model = convert(self.model, config)
                     torch.distributed.barrier()
-                    show_mem_info(logger, msg="After INC")
                     htcore.hpu_initialize(self.model,
                                           mark_only_scales_as_const=True)
                 self.inc_initialized_successfully = True

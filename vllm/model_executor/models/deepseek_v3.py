@@ -31,6 +31,7 @@ from vllm.attention import Attention, AttentionMetadata
 from vllm.config import CacheConfig, ModelConfig, VllmConfig
 from vllm.distributed import (get_pp_group,
                               get_tensor_model_parallel_world_size,
+                              get_tensor_model_parallel_rank,
                               tensor_model_parallel_all_reduce)
 from vllm.model_executor.layers.activation import SiluAndMul
 from vllm.model_executor.layers.fused_moe import FusedMoE
@@ -788,6 +789,9 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
         for name, loaded_weight in weights:
             if "rotary_emb.inv_freq" in name:
                 continue
+            #if "embed_tokens" in name:
+            #    if torch.distributed.get_rank() == 0:
+            #        import pdb;pdb.set_trace()
 
             # TODO(simon): support nextn predict layers
             if hasattr(self.config, "num_nextn_predict_layers"
@@ -826,26 +830,69 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                 weight_loader(param, loaded_weight, shard_id)
                 break
             else:
-                for mapping in expert_params_mapping:
-                    param_name, weight_name, expert_id, shard_id = mapping
-                    if weight_name not in name:
-                        continue
-                    name = name.replace(weight_name, param_name)
+                for i in range(2):
+                    if "mlp.experts" in name and ("down_proj" in name or "gate_proj" in name or "up_proj" in name):
+                        #if "model.layers.33.mlp.experts.28." in name:
+                        #    if torch.distributed.get_rank() ==0:
+                        #        import pdb;pdb.set_trace()
+                        name_lst = name.split("experts")
+                        idx = int(name.split(".")[-3])
+                        if idx >= get_tensor_model_parallel_rank() * 32 and idx < (get_tensor_model_parallel_rank() + 1) * 32:
+                            if "down_proj" in name:
+                                lst_name = "w2_list"
+                                shard_id = "w2"
+                            elif "gate_proj" in name:
+                                lst_name = "w13_list"
+                                shard_id = "w1"
+                            else:
+                                lst_name = "w13_list"
+                                shard_id = "w3"
+                            expert_group = (idx % 32) // 4
+                            lst_id = (idx % 32) % 4
+                            name = name_lst[0] + "experts._temp_expert_group_" + str(expert_group) + ".MoeOp." + lst_name + "." + str(lst_id) + ".weight"
+                            if name not in params_dict:
+                                continue
 
-                    if is_pp_missing_parameter(name, self):
-                        continue
+                            param = params_dict[name]
+                            #if torch.distributed.get_rank() ==0:
+                            #    import pdb;pdb.set_trace()
+                            weight_loader = param.weight_loader
+                            weight_loader(param,
+                                          loaded_weight,
+                                          name,
+                                          shard_id=shard_id,
+                                          expert_id=idx)
+                            #if torch.distributed.get_rank() ==0:
+                            #    import pdb;pdb.set_trace()
+                            break
+ 
+                #for mapping in expert_params_mapping:
+                #    # name: model.layers.38.mlp.experts.100.down_proj.weight
+                #    # to: model.layers.38.mlp.experts._temp_expert_group_x.MoeOp.w2_list.y.weight
+                #    # w2_list, _temp_expert_group_x.MoeOp, x, y, "w2"
+                #    param_name, weight_name, expert_id, shard_id = mapping
+                #    if weight_name not in name:
+                #        continue
+                #    if torch.distributed.get_rank() ==0:
+                #        import pdb;pdb.set_trace()
+                #    name = name.replace(weight_name, param_name)
 
-                    if name not in params_dict:
-                        continue
+                #    if is_pp_missing_parameter(name, self):
+                #        continue
 
-                    param = params_dict[name]
-                    weight_loader = param.weight_loader
-                    weight_loader(param,
-                                  loaded_weight,
-                                  name,
-                                  shard_id=shard_id,
-                                  expert_id=expert_id)
-                    break
+                #    if name not in params_dict:
+                #        continue
+
+                #    if torch.distributed.get_rank() ==0:
+                #        import pdb;pdb.set_trace()
+                #    param = params_dict[name]
+                #    weight_loader = param.weight_loader
+                #    weight_loader(param,
+                #                  loaded_weight,
+                #                  name,
+                #                  shard_id=shard_id,
+                #                  expert_id=expert_id)
+                #    break
                 else:
                     # Skip loading extra bias for GPTQ models.
                     if name.endswith(".bias") and name not in params_dict:
@@ -858,8 +905,13 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                         continue
 
                     param = params_dict[name]
+                    #if torch.distributed.get_rank() ==0:
+                    #    import pdb;pdb.set_trace()
                     weight_loader = getattr(param, "weight_loader",
                                             default_weight_loader)
                     weight_loader(param, loaded_weight)
             loaded_params.add(name)
+            print("!!!!!", name)
+        if torch.distributed.get_rank() ==0:
+            import pdb;pdb.set_trace()
         return loaded_params
