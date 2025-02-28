@@ -33,6 +33,7 @@ logger = init_logger(__name__)
 
 import os
 VLLM_LOAD_FOR_INC = os.environ.get("VLLM_LOAD_FOR_INC", "0") == "1"
+LOW_CPU_MEM = os.environ.get("LOW_CPU_MEM", "0") == "1"
 
 # ==-------------------------------------------------------------------------==
 # VLLM-HPU-EXT PATCH Start
@@ -44,20 +45,8 @@ import habana_frameworks.torch as htorch
 from torch.nn.parameter import Parameter
 
 class MoeMatmul(torch.nn.Module):
-    def __init__(self, intermediate_size_per_partition, hidden_size, params_dtype, num_experts, ep_size):
+    def __init__(self):
         super().__init__()
-        weight = Parameter(torch.empty(
-                intermediate_size_per_partition,
-                hidden_size,
-                dtype=params_dtype,
-                ),
-                     requires_grad=False)
-        self.register_parameter("weight", weight)
-        set_weight_attrs(weight, {"weight_loader": self.weight_loader})
-        #self.num_experts = num_experts
-        self.num_experts = 32
-        self.ep_size = ep_size
-        self.ep_rank = get_tensor_model_parallel_rank() // 8
 
     def set_weight(self, w):
         self.weight = w
@@ -65,100 +54,23 @@ class MoeMatmul(torch.nn.Module):
     def forward(self, state, expert_id, w):
         raise NotImplementedError()
 
-    def weight_loader(self, param: torch.nn.Parameter,
-                      loaded_weight: torch.Tensor, weight_name: str,
-                      shard_id: str, expert_id: int) -> None:
-        tp_rank = get_tensor_model_parallel_rank()
-        if self.ep_size > 1:
-            tp_rank = tp_rank // self.ep_size
-        #    # now we want to only load weights for current expert group
-        #    expert_id = expert_id - self.ep_rank * self.num_experts
-        #    if expert_id < 0 or expert_id >= self.num_experts:
-        #        return
-
-        #if torch.distributed.get_rank() ==0:
-        #    import pdb;pdb.set_trace()
-            #print(f"weight_loader for {weight_name}, param.data: {len(param.data)}, shard_id: {shard_id}, expert_id: {expert_id}, num_experts: {self.num_experts}, tp_rank: {tp_rank}, ep_rank: {self.ep_rank}")
-        # compressed-tensors checkpoints with packed weights are stored flipped
-        # TODO (mgoin): check self.quant_method.quant_config.quant_format
-        # against known CompressionFormat enum values that have this quality
-        #loaded_weight = loaded_weight.t().contiguous() if (
-        #    self.quant_method.__class__.__name__
-        #    == "CompressedTensorsWNA16MoEMethod") else loaded_weight
-
-        if shard_id not in ("w1", "w2", "w3"):
-            raise ValueError(f"shard_id must be ['w1','w2','w3'] but "
-                             f"got {shard_id}.")
-
-        WEIGHT_SCALE_SUPPORTED = [
-            e.value for e in FusedMoeWeightScaleSupported
-        ]
-        # Fetch the dim to shard the parameter/loaded weight
-        # based on the shard id. This will be whatever
-        # dimension intermediate_size_per_partition is used.
-        SHARD_ID_TO_SHARDED_DIM = {"w1": 0, "w2": 1, "w3": 0}
-
-        #expert_data = param.data[expert_id]
-        #expert_data = param
-
-        # is_transposed: if the dim to shard the weight
-        # should be flipped. Required by GPTQ, compressed-tensors
-        # should be whatever dimension intermediate_size_per_partition is
-        is_transposed = getattr(param, "is_transposed", False)
-        shard_dim = SHARD_ID_TO_SHARDED_DIM[shard_id]
-        if is_transposed:
-            shard_dim = int(not shard_dim)
-
-        # Case model weights
-        if "weight" in weight_name:
-            #if torch.distributed.get_rank() ==0:
-            #    import pdb;pdb.set_trace()
-            if shard_id in ("w1", "w3"):
-                orig_exp_data = param.view(param.size())
-                # Index the loaded weight for tp sharding.
-                # gate_up_proj: "MergedColumnParallel", so tp sharding on output_dim
-                shard_size = param.shape[shard_dim] // 2
-                loaded_weight = loaded_weight.narrow(shard_dim, shard_size * tp_rank,
-                                                     shard_size)
-                # Narrow parameter and load.
-                # w1, gate_proj: Load into first logical weight of w13.
-                #if torch.distributed.get_rank() ==0:
-                #    import pdb;pdb.set_trace()
-                if shard_id == "w1":
-                    #if torch.distributed.get_rank() ==0:
-                    #    import pdb;pdb.set_trace()
-                    param.data[:shard_size] = loaded_weight
-                    #expert_data = param.narrow(shard_dim, 0, shard_size)
-                # w3, up_proj: Load into second logical weight of w13.
-                else:
-                    assert shard_id == "w3"
-                    #if torch.distributed.get_rank() ==0:
-                    #    import pdb;pdb.set_trace()
-                    param.data[shard_size:] = loaded_weight
-                    #expert_data = param.narrow(shard_dim, shard_size, shard_size)
-
-#                print("laery.py ?????????????? _load_w13 After Narrow expert_data shape: " + str(expert_data.shape) + " loaded_weight shape: " + str(loaded_weight.shape))
-                #expert_data.copy_(loaded_weight)
-                #expert_data.data = loaded_weight
-
-            elif shard_id == "w2":
-                # load w2
-                shard_size = param.shape[shard_dim]
-                loaded_weight = loaded_weight.narrow(shard_dim,
-                                                     shard_size * tp_rank,
-                                                     shard_size)
-                # w2, down_proj: Load into only logical weight of w2.
-                #expert_data.copy_(loaded_weight)
-                param.data = loaded_weight
  
 class VllmMixtureOfExpertsOp(torch.nn.Module):
-    def __init__(self, num_total_experts, intermediate_size_per_partition, hidden_size, params_dtype, ep_size):
+    def __init__(self, num_total_experts):
         super().__init__()
-        self.w13_list = torch.nn.ModuleList(
-            [MoeMatmul(2 * intermediate_size_per_partition, hidden_size, params_dtype, num_total_experts, ep_size) for _ in range(num_total_experts)]
-        )
+        if not LOW_CPU_MEM:
+            self.w13_list = torch.nn.ModuleList(
+                [MoeMatmul() for _ in range(num_total_experts)]
+            )
+        else:
+            self.w1_list = torch.nn.ModuleList(
+                [MoeMatmul() for _ in range(num_total_experts)]
+            )
+            self.w3_list = torch.nn.ModuleList(
+                [MoeMatmul() for _ in range(num_total_experts)]
+            )
         self.w2_list = torch.nn.ModuleList(
-            [MoeMatmul(hidden_size, intermediate_size_per_partition, params_dtype, num_total_experts, ep_size) for _ in range(num_total_experts)]
+            [MoeMatmul() for _ in range(num_total_experts)]
         )
         self.num_experts = num_total_experts
         # FIXME (Yi) add experts_min and experts_max as init parameters
@@ -179,25 +91,41 @@ class VllmMixtureOfExpertsOp(torch.nn.Module):
         assert self.experts_min is not None, "`experts_min` is not set"
         assert self.experts_max is not None, "`experts_max` is not set"
         experts_min, experts_max = self.experts_min, self.experts_max
-        w1_list = [self.w13_list[i].weight.squeeze() for i in experts_range]
-        w2_list = [self.w2_list[i].weight.squeeze() for i in experts_range]
-        return torch.ops.hpu.mixture_of_experts(
-            hidden_states=hidden_states,
-            expert_routing_table=expert_routing_table,
-            router_weights=router_weights,
-            w12=w1_list,
-            w3=w2_list,
-            permuted_weights=permuted_weights,
-            activation=activation,
-            experts_min=experts_min,
-            experts_max=experts_max,
-        )
-
+        if not LOW_CPU_MEM:
+            w1_list = [self.w13_list[i].weight.squeeze() for i in experts_range]
+            w2_list = [self.w2_list[i].weight.squeeze() for i in experts_range]
+            return torch.ops.hpu.mixture_of_experts.fused_weights(
+                hidden_states=hidden_states,
+                expert_routing_table=expert_routing_table,
+                router_weights=router_weights,
+                w12=w1_list,
+                w3=w2_list,
+                permuted_weights=permuted_weights,
+                activation=activation,
+                experts_min=experts_min,
+                experts_max=experts_max,
+            )
+        else:
+            w1_list = [self.w1_list[i].weight.squeeze() for i in experts_range]
+            w3_list = [self.w3_list[i].weight.squeeze() for i in experts_range]
+            w2_list = [self.w2_list[i].weight.squeeze() for i in experts_range]
+            return torch.ops.hpu.mixture_of_experts.default(
+                hidden_states=hidden_states,
+                expert_routing_table=expert_routing_table,
+                router_weights=router_weights,
+                w1=w1_list,
+                w2=w2_list,
+                w3=w3_list,
+                permuted_weights=permuted_weights,
+                activation=activation,
+                experts_min=experts_min,
+                experts_max=experts_max,
+            )
 
 class _DynamicFusedMOE(torch.nn.Module):
-    def __init__(self, num_total_experts, intermediate_size_per_partition, hidden_size, params_dtype, ep_size):
+    def __init__(self, num_total_experts):
         super().__init__()
-        self.MoeOp = VllmMixtureOfExpertsOp(num_total_experts, intermediate_size_per_partition, hidden_size, params_dtype, ep_size)
+        self.MoeOp = VllmMixtureOfExpertsOp(num_total_experts)
 
     def forward(self, hidden_states, score, topk):
         htorch.core.mark_step()
@@ -262,14 +190,33 @@ class UnquantizedFusedMoEMethod(FusedMoEMethodBase, CustomOp):
                        hidden_size: int, intermediate_size_per_partition: int,
                        params_dtype: torch.dtype, **extra_weight_attrs):
         # Fused gate_up_proj (column parallel)
-        w13_weight = torch.nn.Parameter(torch.empty(
-            num_experts,
-            2 * intermediate_size_per_partition,
-            hidden_size,
-            dtype=params_dtype),
-                                        requires_grad=False)
-        layer.register_parameter("w13_weight", w13_weight)
-        set_weight_attrs(w13_weight, extra_weight_attrs)
+        if not LOW_CPU_MEM:
+            w13_weight = torch.nn.Parameter(torch.empty(
+                num_experts,
+                2 * intermediate_size_per_partition,
+                hidden_size,
+                dtype=params_dtype),
+                                            requires_grad=False)
+            layer.register_parameter("w13_weight", w13_weight)
+            set_weight_attrs(w13_weight, extra_weight_attrs)
+        else:
+            w1_weight = torch.nn.Parameter(torch.empty(
+                num_experts,
+                intermediate_size_per_partition,
+                hidden_size,
+                dtype=params_dtype),
+                                            requires_grad=False)
+            layer.register_parameter("w1_weight", w1_weight)
+            set_weight_attrs(w1_weight, extra_weight_attrs)
+
+            w3_weight = torch.nn.Parameter(torch.empty(
+                num_experts,
+                intermediate_size_per_partition,
+                hidden_size,
+                dtype=params_dtype),
+                                            requires_grad=False)
+            layer.register_parameter("w3_weight", w3_weight)
+            set_weight_attrs(w3_weight, extra_weight_attrs)
 
         # down_proj (row parallel)
         w2_weight = torch.nn.Parameter(torch.empty(
@@ -687,7 +634,7 @@ class FusedMoE(torch.nn.Module):
                 "CompressedTensorsWNA16MoEMethod"):
             moe_quant_params["intermediate_size_full"] = intermediate_size
 
-        #self.quant_method.create_weights(layer=self, **moe_quant_params)
+        self.quant_method.create_weights(layer=self, **moe_quant_params)
 
 
         layer = self
@@ -704,26 +651,65 @@ class FusedMoE(torch.nn.Module):
             assert n_expert_slice * num_expert_group == num_experts_on_rank
 
             for i in range(num_expert_group):
-                _temp_expert_group = _DynamicFusedMOE(num_expert_per_group, self.intermediate_size_per_partition, hidden_size, params_dtype, self.ep_size)
+                #_temp_expert_group = _DynamicFusedMOE(num_expert_per_group, self.intermediate_size_per_partition, hidden_size, params_dtype, self.ep_size)
+                _temp_expert_group = _DynamicFusedMOE(num_expert_per_group)
                 min_expert = i * n_expert_slice
                 max_expert = (i + 1) * n_expert_slice
                 # Note: clone weight will cause OoM.
                 # rank_debug(f"i:{i}, num_experts:{num_experts} loading experts from {min_expert} to {max_expert}, layer.w13_weight.shape : {layer.w13_weight.shape}")
-                #w13_list_slice = [
-                #    layer.w13_weight[j]
-                #    for j in range(min_expert, max_expert)
-                #]
-                #w2_list_slice = [
-                #    layer.w2_weight[j]
-                #    for j in range(min_expert, max_expert)
-                #]
-                #for index in range(len(w13_list_slice)):
-                #    _temp_expert_group.MoeOp.w13_list[index].set_weight(
-                #        w13_list_slice[index]
-                #    )
-                #    _temp_expert_group.MoeOp.w2_list[index].set_weight(
-                #        w2_list_slice[index]
-                #    )
+                if not LOW_CPU_MEM:
+                    w13_list_slice = [
+                        layer.w13_weight[j]
+                        for j in range(min_expert, max_expert)
+                    ]
+                else:
+                    w1_list_slice = [
+                        layer.w1_weight[j]
+                        for j in range(min_expert, max_expert)
+                    ]
+                    w3_list_slice = [
+                        layer.w3_weight[j]
+                        for j in range(min_expert, max_expert)
+                    ]
+                w2_list_slice = [
+                    layer.w2_weight[j]
+                    for j in range(min_expert, max_expert)
+                ]
+                for index in range(len(w2_list_slice)):
+                    if not LOW_CPU_MEM:
+                        _temp_expert_group.MoeOp.w13_list[index].set_weight(
+                            Parameter(torch.empty(
+                             w13_list_slice[index].shape,
+                             dtype=w13_list_slice[index].dtype,
+                             ),
+                                  requires_grad=False)
+                            #w13_list_slice[index]
+                        )
+                    else:
+                        _temp_expert_group.MoeOp.w1_list[index].set_weight(
+                            Parameter(torch.empty(
+                             w1_list_slice[index].shape,
+                             dtype=w1_list_slice[index].dtype,
+                             ),
+                                  requires_grad=False)
+                            #w13_list_slice[index]
+                        )
+                        _temp_expert_group.MoeOp.w3_list[index].set_weight(
+                            Parameter(torch.empty(
+                             w3_list_slice[index].shape,
+                             dtype=w3_list_slice[index].dtype,
+                             ),
+                                  requires_grad=False)
+                            #w13_list_slice[index]
+                        )
+                    _temp_expert_group.MoeOp.w2_list[index].set_weight(
+                        Parameter(torch.empty(
+                            w2_list_slice[index].shape,
+                            dtype=w2_list_slice[index].dtype,
+                        ),
+                            requires_grad=False)
+                        #w2_list_slice[index]
+                    )
                 # FIXME: (Yi) pass `experts_min` and `experts_max` to MoeOp.
                 setattr(_temp_expert_group.MoeOp, "experts_min", min_expert + ep_shift)
                 setattr(_temp_expert_group.MoeOp, "experts_max", max_expert - 1 + ep_shift)
@@ -996,25 +982,43 @@ class FusedMoE(torch.nn.Module):
         if "weight" in weight_name:
             #if torch.distributed.get_rank() ==0:
             #    import pdb;pdb.set_trace()
+            expert_group = expert_id // (self.num_experts//self.num_expert_group)
+            lst_id = expert_id % (self.num_experts//self.num_expert_group)
+            expert = getattr(self, f"_temp_expert_group_{expert_group}")
             if shard_id in ("w1", "w3"):
-                orig_exp_data = expert_data.view(expert_data.size())
-                # Index the loaded weight for tp sharding.
-                # gate_up_proj: "MergedColumnParallel", so tp sharding on output_dim
-                shard_size = expert_data.shape[shard_dim] // 2
-                loaded_weight = loaded_weight.narrow(shard_dim, shard_size * tp_rank,
+                if not LOW_CPU_MEM:
+                    expert_data = expert.MoeOp.w13_list[lst_id].weight
+                    orig_exp_data = expert_data.view(expert_data.size())
+
+                    # Index the loaded weight for tp sharding.
+                    # gate_up_proj: "MergedColumnParallel", so tp sharding on output_dim
+                    shard_size = expert_data.shape[shard_dim] // 2
+                    loaded_weight = loaded_weight.narrow(shard_dim, shard_size * tp_rank,
                                                      shard_size)
+                    if shard_id == "w1":
+                        expert_data.data[:shard_size] = loaded_weight
+                    else:
+                        assert shard_id == "w3"
+                        expert_data.data[shard_size:] = loaded_weight
                 # Narrow parameter and load.
                 # w1, gate_proj: Load into first logical weight of w13.
-                if shard_id == "w1":
-                    expert_data = expert_data.narrow(shard_dim, 0, shard_size)
-                # w3, up_proj: Load into second logical weight of w13.
                 else:
-                    assert shard_id == "w3"
-                    expert_data = expert_data.narrow(shard_dim, shard_size, shard_size)
+                    if shard_id == "w1":
+                        expert_data = expert.MoeOp.w1_list[lst_id].weight
+                        expert_data.data = loaded_weight
+                        #expert_data.data[:shard_size] = loaded_weight
+                        #expert_data = expert_data.narrow(shard_dim, 0, shard_size)
+                    # w3, up_proj: Load into second logical weight of w13.
+                    else:
+                        assert shard_id == "w3"
+                        #expert_data = expert_data.narrow(shard_dim, shard_size, shard_size)
+                        expert_data = expert.MoeOp.w3_list[lst_id].weight
+                        expert_data.data = loaded_weight
+                        #expert_data.data[shard_size:] = loaded_weight
 
 #                print("laery.py ?????????????? _load_w13 After Narrow expert_data shape: " + str(expert_data.shape) + " loaded_weight shape: " + str(loaded_weight.shape))
                 #expert_data.copy_(loaded_weight)
-                expert_data = loaded_weight
+                #expert_data.data = loaded_weight
 
                 if is_hpu:
                     # FIXME: (Yi) add it back
@@ -1023,13 +1027,15 @@ class FusedMoE(torch.nn.Module):
  
             elif shard_id == "w2":
                 # load w2
+                #expert_data = self.w13_list[expert_id]
+                expert_data = expert.MoeOp.w2_list[lst_id].weight
                 shard_size = expert_data.shape[shard_dim]
                 loaded_weight = loaded_weight.narrow(shard_dim,
                                                      shard_size * tp_rank,
                                                      shard_size)
                 # w2, down_proj: Load into only logical weight of w2.
                 #expert_data.copy_(loaded_weight)
-                expert_data = loaded_weight
+                expert_data.data = loaded_weight
                 if is_hpu:
                     if _VLLM_HPU_FP8:
                         self.hpu_fused_moe.MoeOp.w2_list[expert_id].set_weight(expert_data)
@@ -1118,14 +1124,20 @@ class FusedMoE(torch.nn.Module):
             ckpt_up_proj_name: str,
             num_experts: int) -> List[Tuple[str, str, int, str]]:
 
+        mapping = {
+            ckpt_gate_proj_name: "experts.w1_" if LOW_CPU_MEM else "experts.w13_",
+            ckpt_down_proj_name: "experts.w2_",
+            ckpt_up_proj_name: "experts.w3_" if LOW_CPU_MEM else "experts.w13_",
+        }
         return [
             # (param_name, weight_name, expert_id, shard_id)
-            ("experts.w13_" if weight_name
-             in [ckpt_gate_proj_name, ckpt_up_proj_name] else "experts.w2_",
-             f"experts._temp_expert_group_{expert_id}.MoeOp.{weight_name}.", expert_id, shard_id)
+            (mapping[weight_name],
+             #f"experts._temp_expert_group_{expert_id}.MoeOp.{weight_name}.", expert_id, shard_id)
+             f"experts.{expert_id}.{weight_name}.", expert_id, shard_id)
             for expert_id in range(num_experts) for shard_id, weight_name in [
                 ("w1", ckpt_gate_proj_name),
                 ("w2", ckpt_down_proj_name),
                 ("w3", ckpt_up_proj_name),
             ]
         ]
+
