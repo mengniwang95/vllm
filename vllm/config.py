@@ -972,7 +972,7 @@ class ModelConfig:
     @property
     def use_mla(self) -> bool:
         # FIXME: (Yi) add it back
-        return True
+        #return True
         if self.quantization is not None and self.quantization not in [\
             "fp8", "compressed-tensors"]:
             logger.warning(

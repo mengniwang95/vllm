@@ -403,8 +403,6 @@ class DefaultModelLoader(BaseModelLoader):
                 self._get_all_weights(model_config, model))
             # We only enable strict check for non-quantized models
             # that have loaded weights tracking currently.
-            if torch.distributed.get_rank() == 0:
-                import pdb;pdb.set_trace()
             if model_config.quantization is None and loaded_weights is not None:
                 weights_not_loaded = weights_to_load - loaded_weights
                 if weights_not_loaded:

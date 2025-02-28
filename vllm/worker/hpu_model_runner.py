@@ -754,12 +754,12 @@ class HPUModelRunnerBase(ModelRunnerBase[TModelInputForHPU]):
                 )
                 self.model = self.lora_manager.create_lora_manager(self.model)
             self_attn = self.model.model.layers[0].self_attn
-            for layer in self.model.model.layers:
-                self_attn = layer.self_attn
-                # delete attrs: q_b_proj, kv_b_proj, o_proj in self_attn
-                delattr(self_attn, "q_b_proj")
-                delattr(self_attn, "kv_b_proj")
-                delattr(self_attn, "o_proj") 
+            #for layer in self.model.model.layers:
+            #    self_attn = layer.self_attn
+            #    # delete attrs: q_b_proj, kv_b_proj, o_proj in self_attn
+            #    delattr(self_attn, "q_b_proj")
+            #    delattr(self_attn, "kv_b_proj")
+            #    delattr(self_attn, "o_proj") 
             # ForkedPdb().set_trace()
             if self.model_config.quantization is not None and "inc" in self.model_config.quantization:
                 logger.info("Preparing model with INC..")

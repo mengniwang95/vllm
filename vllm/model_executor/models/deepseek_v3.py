@@ -912,6 +912,4 @@ class DeepseekV3ForCausalLM(nn.Module, SupportsPP):
                     weight_loader(param, loaded_weight)
             loaded_params.add(name)
             print("!!!!!", name)
-        if torch.distributed.get_rank() ==0:
-            import pdb;pdb.set_trace()
         return loaded_params
